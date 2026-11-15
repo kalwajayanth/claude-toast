@@ -1,0 +1,4 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"refactor the auth middleware"}]},"uuid":"b1","origin":{"kind":"human"},"sessionId":"test-session-b"}
+{"type":"ai-title","aiTitle":"Old title that gets replaced","sessionId":"test-session-b"}
+{"type":"ai-title","aiTitle":"Refactor auth middleware & add tests","sessionId":"test-session-b"}
+{"parentUuid":"b1","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Refactor done: **auth middleware** now uses the new `TokenVerifier`, and all 42 tests pass. Want me to open the PR?"}]},"uuid":"b2","sessionId":"test-session-b"}

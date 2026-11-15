@@ -1,0 +1,20 @@
+{
+  "dedupeSeconds": 60,
+  "interactive": {
+    "enabled": true,
+    "timeoutSeconds": 300,
+    "skipWhenWatching": true
+  },
+  "debug": false,
+  "sounds": {
+    "question": "ms-winsoundevent:Notification.Reminder",
+    "permission": "ms-winsoundevent:Notification.Default",
+    "ready": "ms-winsoundevent:Notification.IM"
+  },
+  "ntfy": {
+    "enabled": false,
+    "server": "https://ntfy.sh",
+    "topic": "",
+    "token": ""
+  }
+}

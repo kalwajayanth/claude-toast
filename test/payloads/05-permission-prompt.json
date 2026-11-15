@@ -1,0 +1,1 @@
+{"session_id":"test-session-d","transcript_path":"__TEST_DIR__/transcripts/does-not-exist.jsonl","cwd":"C:\\Users\\dev\\code\\my-api","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}

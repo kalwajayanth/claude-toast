@@ -1,0 +1,1 @@
+{"session_id":"test-session-f","transcript_path":"__TEST_DIR__/transcripts/session-b.jsonl","cwd":"C:/Users/dev/code/auth-service","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship it?","header":"Ship","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]}]}}

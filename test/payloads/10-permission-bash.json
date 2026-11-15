@@ -1,0 +1,1 @@
+{"session_id":"test-session-f","transcript_path":"__TEST_DIR__/transcripts/session-b.jsonl","cwd":"C:/Users/dev/code/auth-service","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"git push origin feature/auth-refactor && gh pr create --fill","description":"Push the branch and open a pull request"},"permission_suggestions":[]}

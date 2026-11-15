@@ -1,0 +1,5 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"test-session-a"}
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"Set up a local cache for the API responses"},"uuid":"a1","origin":{"kind":"human"},"sessionId":"test-session-a"}
+{"type":"ai-title","aiTitle":"Local API response cache","sessionId":"test-session-a"}
+{"type":"custom-title","customTitle":"cache-db-decision","sessionId":"test-session-a"}
+{"type":"agent-name","agentName":"cache-db-decision","sessionId":"test-session-a"}
