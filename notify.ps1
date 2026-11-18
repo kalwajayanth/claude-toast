@@ -9,6 +9,10 @@
     -Event notification   Notification, matcher "permission_prompt"  notify-only fallback
     -Event stop           Stop                                   one "Response ready" toast per reply
     -Event prompt         UserPromptSubmit                       you replied: clear that chat's toasts
+    -Event setup          SessionStart (plugin only)             registers the button link handler
+
+  -DataDir: where config.json, logs\ and state\ live. The plugin passes ${CLAUDE_PLUGIN_DATA}
+  (kept across plugin updates); a manual install (install.ps1) leaves it empty = this folder.
 
   Contract with Claude Code: never break it.
     * always exits 0; every error is caught and logged to logs\error.log
@@ -17,7 +21,7 @@
       when you are NOT looking at that chat's terminal tab; on timeout, "Terminal" or any error
       they return nothing and Claude Code shows its normal terminal prompt.
 #>
-param([string]$Event = 'notification')
+param([string]$Event = 'notification', [string]$DataDir)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
@@ -26,8 +30,10 @@ $VerbosePreference     = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
 
 $script:Root     = $PSScriptRoot
-$script:LogDir   = Join-Path $PSScriptRoot 'logs'
-$script:StateDir = Join-Path $PSScriptRoot 'state'
+$script:DataDir  = if ($DataDir) { $DataDir.TrimEnd('\', '/') } else { $PSScriptRoot }
+$script:PluginMode = [bool]$DataDir
+$script:LogDir   = Join-Path $script:DataDir 'logs'
+$script:StateDir = Join-Path $script:DataDir 'state'
 # Windows PowerShell's own AppUserModelID: lets us show toasts without registering an app.
 $script:AppId    = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 $script:Utf8     = New-Object System.Text.UTF8Encoding($false)
@@ -69,7 +75,11 @@ function Format-ErrorRecord($err) {
 
 function Read-Config {
     $path = $env:CLAUDE_TOAST_CONFIG          # override, used by tests
-    if (-not $path) { $path = Join-Path $script:Root 'config.json' }
+    if (-not $path) {
+        # Plugin: your copy in the data folder; until it exists, the defaults shipped with the plugin.
+        $path = Join-Path $script:DataDir 'config.json'
+        if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $script:Root 'config.json' }
+    }
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     try {
         $raw = [System.IO.File]::ReadAllText($path, $script:Utf8)
@@ -943,9 +953,45 @@ function Invoke-PromptEvent($payload) {
     Write-ActivityLog ('CLEARED | {0} toast(s) of this chat removed (you replied)' -f $removed)
 }
 
+# ------------------------------------------------------------------ plugin setup (SessionStart)
+
+# Marker: claude-toast is ALSO installed by hand (install.ps1 hooks in settings.json).
+# Then the plugin stays quiet, so you never get every toast twice.
+function Get-ManualInstallMarker { return (Join-Path $script:DataDir 'manual-install-detected') }
+
+function Invoke-SetupEvent {
+    if (-not $script:PluginMode) { return }
+    if (-not (Test-Path -LiteralPath $script:DataDir)) { $null = New-Item -ItemType Directory -Path $script:DataDir -Force }
+
+    # Your own config.json, kept across plugin updates; starts as a copy of the defaults.
+    $userConfig = Join-Path $script:DataDir 'config.json'
+    if (-not (Test-Path -LiteralPath $userConfig)) {
+        Copy-Item -LiteralPath (Join-Path $script:Root 'config.json') -Destination $userConfig
+        Write-ActivityLog "CONFIG | created $userConfig"
+    }
+
+    . (Join-Path $script:Root 'lib\settings.ps1')
+    $marker = Get-ManualInstallMarker
+    if (Test-ClaudeToastInstalled (Read-ClaudeSettings (Get-ClaudeSettingsPath))) {
+        # The manual install owns the click handler; don't point it at the plugin.
+        [System.IO.File]::WriteAllText($marker, 'claude-toast hooks found in settings.json - the plugin stays quiet. Run uninstall.ps1 to use the plugin.', $script:Utf8)
+        Write-ErrorLog 'claude-toast is also installed by hand (settings.json); the plugin stays quiet - run uninstall.ps1 to use the plugin instead'
+        return
+    }
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+
+    # Point claude-toast: links at this plugin version's answer.ps1 (the path changes on updates).
+    if (Register-ClaudeToastProtocol (Join-Path $script:Root 'answer.ps1') $script:DataDir) {
+        Write-ActivityLog "SETUP | link handler -> $($script:Root)"
+    }
+}
+
 function Invoke-Main {
     $script:Config  = Read-Config
     $script:DebugOn = ($env:CLAUDE_TOAST_DEBUG -eq '1') -or ((Get-ConfigValue 'debug' $false) -eq $true)
+
+    if ($Event -eq 'setup') { Invoke-SetupEvent; return }
+    if ($script:PluginMode -and (Test-Path -LiteralPath (Get-ManualInstallMarker))) { return }
 
     $payload = Read-Payload
     if ($null -eq $payload) { Write-ErrorLog 'no JSON payload on stdin'; return }

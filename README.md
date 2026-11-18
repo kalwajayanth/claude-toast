@@ -105,7 +105,38 @@ Set `"interactive": { "enabled": false }` in `config.json` for notify-only toast
 
 ## Install
 
-Requires Windows 10/11 and Claude Code. From this folder:
+Requires Windows 10/11 and Claude Code. Built-in Windows PowerShell 5.1 only — no modules,
+no Node, no admin rights. Pick **one** of the two ways (if both are installed, the plugin
+notices and stays quiet, so you never get double toasts).
+
+### As a Claude Code plugin (recommended)
+
+In Claude Code:
+
+```
+/plugin install claudecode-notification-toast --marketplace kalwajayanth/claude-toast
+```
+
+or in two steps (older Claude Code):
+
+```
+/plugin marketplace add kalwajayanth/claude-toast
+/plugin install claudecode-notification-toast@kalwajayanth
+```
+
+Then restart Claude Code. On the first session start the plugin registers the `claude-toast:`
+link handler (per user, no admin) and copies the default settings to your own
+`config.json` in the plugin's data folder,
+`%USERPROFILE%\.claude\plugins\data\claudecode-notification-toast-kalwajayanth\` — edit that one;
+it survives plugin updates. Logs (`logs\`) and runtime state (`state\`) live there too.
+The plugin waits up to 300 s for a toast answer (its hook timeout is 330 s), so keep
+`interactive.timeoutSeconds` at 300 or less.
+
+Remove it with `/plugin uninstall claudecode-notification-toast@kalwajayanth`.
+
+### By hand (install.ps1)
+
+Clone or download this repo, then from its folder:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
@@ -157,7 +188,21 @@ config (with `skipWhenWatching` off); your `config.json` is not used.
 
 Options: `-Only 09` runs one case, `-DelaySeconds 0` skips the pauses between cases.
 
+Plugin mode (data folder, first-run setup, "installed by hand too" guard) has its own check:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\test\test-plugin.ps1
+```
+
+It uses a temporary data folder and a fake `settings.json`; your `claude-toast:` link handler is
+saved before and restored after. Validate the plugin manifests with `claude plugin validate .`.
+
 ## Uninstall
+
+Plugin: `/plugin uninstall claudecode-notification-toast@kalwajayanth`. The `claude-toast:` link
+handler stays registered but does nothing; remove it with `uninstall.ps1` if you like.
+
+Installed by hand:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1          # hooks + link handler
@@ -170,6 +215,9 @@ becomes empty because of it) and the `claude-toast:` link handler. Everything el
 a `settings.json.claude-toast-backup-*` file over `settings.json`.
 
 ## Configuration — `config.json`
+
+Plugin: your copy in the data folder (see Install). Installed by hand: `config.json` next to the
+scripts.
 
 ```json
 {
@@ -243,13 +291,20 @@ claude-toast's own toast; raise `dedupeSeconds`.
 ## Files
 
 ```
-notify.ps1        the hook handler (-Event question | permission | notification | stop | prompt)
+notify.ps1        the hook handler (-Event question | permission | notification | stop | prompt | setup)
 answer.ps1        claude-toast: link handler - records button clicks, focuses the terminal
 install.ps1       merge hooks into ~/.claude/settings.json (backup, idempotent) + register links
 uninstall.ps1     remove only claude-toast's hooks and link handler
 lib/settings.ps1  shared settings.json read/merge/write + link registration helpers
-config.json       interactive answering, sounds, de-dup window, debug, ntfy
-test/             payloads, sample transcripts, test.ps1
+config.json       interactive answering, sounds, de-dup window, debug, ntfy (defaults)
+.claude-plugin/   plugin.json (the plugin) + marketplace.json (this repo as its marketplace)
+hooks/hooks.json  the plugin's hooks (same events as install.ps1, plus SessionStart setup)
+test/             payloads, sample transcripts, test.ps1, test-plugin.ps1
 logs/             error.log (+ activity.log when debug is on)        — created at runtime
 state/            de-dup markers, pending prompts, clicks, focus info — created at runtime
+LICENSE           MIT
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

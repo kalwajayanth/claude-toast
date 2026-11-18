@@ -72,7 +72,7 @@ Write-ClaudeSettings $SettingsPath $settings
 
 # claude-toast: links -> answer.ps1, so toast buttons can answer questions. Per user (HKCU),
 # started through "conhost --headless" so clicking a button never opens a window.
-Register-ClaudeToastProtocol $answer
+$null = Register-ClaudeToastProtocol $answer ''
 
 Write-Host "claude-toast installed into $SettingsPath" -ForegroundColor Green
 if ($backup)   { Write-Host "  backup:   $backup" }

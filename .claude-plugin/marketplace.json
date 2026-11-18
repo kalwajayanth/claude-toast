@@ -1,0 +1,15 @@
+{
+  "name": "kalwajayanth",
+  "description": "Claude Code plugins by Jayanth Kalwa",
+  "owner": {
+    "name": "Jayanth Kalwa",
+    "url": "https://github.com/kalwajayanth"
+  },
+  "plugins": [
+    {
+      "name": "claudecode-notification-toast",
+      "source": "./",
+      "description": "Windows toast notifications for Claude Code that you can answer: questions, permissions, response ready."
+    }
+  ]
+}

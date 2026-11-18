@@ -48,6 +48,19 @@ function Test-ClaudeToastHook($hook) {
     return ($command -match '(?i)notify\.ps1"?\s+-Event\s+(question|notification|permission|stop|prompt)\b')
 }
 
+# True if settings.json has any claude-toast hook (i.e. it was installed with install.ps1).
+function Test-ClaudeToastInstalled($settings) {
+    $hooksProp = $settings.PSObject.Properties['hooks']
+    if ($null -eq $hooksProp -or $null -eq $hooksProp.Value) { return $false }
+    foreach ($eventProp in @($hooksProp.Value.PSObject.Properties)) {
+        foreach ($group in @($eventProp.Value)) {
+            if ($null -eq $group -or $null -eq $group.PSObject.Properties['hooks']) { continue }
+            foreach ($hook in @($group.hooks)) { if (Test-ClaudeToastHook $hook) { return $true } }
+        }
+    }
+    return $false
+}
+
 # Removes every claude-toast hook. Only prunes matcher groups / event arrays / the "hooks"
 # object when *we* emptied them, so the user's own (even empty) entries are left alone.
 function Remove-ClaudeToastHooks($settings) {
@@ -90,13 +103,20 @@ function Remove-ClaudeToastHooks($settings) {
 
 $script:ProtocolKey = 'HKCU:\Software\Classes\claude-toast'
 
-function Register-ClaudeToastProtocol([string]$answerScript) {
+# $dataDir: the plugin's data folder (state\ and logs\ live there); empty for a manual install.
+# Returns $true if the registry was changed, $false if it already pointed there.
+function Register-ClaudeToastProtocol([string]$answerScript, [string]$dataDir) {
     $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
-    $command = "`"$conhost`" --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$answerScript`" `"%1`""
-    $null = New-Item -Path "$script:ProtocolKey\shell\open\command" -Force
+    $data    = if ($dataDir) { " -DataDir `"$($dataDir.TrimEnd('\', '/'))`"" } else { '' }
+    $command = "`"$conhost`" --headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$answerScript`"$data `"%1`""
+    $commandKey = "$script:ProtocolKey\shell\open\command"
+    $current = try { (Get-ItemProperty -LiteralPath $commandKey -ErrorAction Stop).'(default)' } catch { $null }
+    if ($current -eq $command) { return $false }
+    $null = New-Item -Path $commandKey -Force
     Set-ItemProperty -Path $script:ProtocolKey -Name '(default)' -Value 'URL:claude-toast'
     Set-ItemProperty -Path $script:ProtocolKey -Name 'URL Protocol' -Value ''
-    Set-ItemProperty -Path "$script:ProtocolKey\shell\open\command" -Name '(default)' -Value $command
+    Set-ItemProperty -Path $commandKey -Name '(default)' -Value $command
+    return $true
 }
 
 function Unregister-ClaudeToastProtocol {

@@ -15,11 +15,13 @@
   "terminal" and "focus" also bring the existing terminal window/tab running that chat to the
   front (they never open a new one).
 #>
-param([string]$Uri)
+# -DataDir: set by the plugin's link handler (its data folder); empty for a manual install.
+param([string]$Uri, [string]$DataDir)
 
 $ErrorActionPreference = 'Stop'
-$script:StateDir = Join-Path $PSScriptRoot 'state'
-$script:LogDir   = Join-Path $PSScriptRoot 'logs'
+$script:DataDir  = if ($DataDir) { $DataDir.TrimEnd('\', '/') } else { $PSScriptRoot }
+$script:StateDir = Join-Path $script:DataDir 'state'
+$script:LogDir   = Join-Path $script:DataDir 'logs'
 $script:Utf8     = New-Object System.Text.UTF8Encoding($false)
 
 function Write-Log([string]$file, [string]$message) {
@@ -34,7 +36,8 @@ function Write-Log([string]$file, [string]$message) {
 function Get-DebugOn {
     if ($env:CLAUDE_TOAST_DEBUG -eq '1') { return $true }
     try {
-        $cfgPath = Join-Path $PSScriptRoot 'config.json'
+        $cfgPath = Join-Path $script:DataDir 'config.json'
+        if (-not (Test-Path -LiteralPath $cfgPath)) { $cfgPath = Join-Path $PSScriptRoot 'config.json' }
         $cfg = [System.IO.File]::ReadAllText($cfgPath, $script:Utf8).TrimStart([char]0xFEFF) | ConvertFrom-Json
         return ($cfg.debug -eq $true)
     } catch { return $false }

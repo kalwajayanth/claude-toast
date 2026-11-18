@@ -1,0 +1,83 @@
+{
+  "description": "claude-toast: Windows toasts you can answer (questions, permissions, response ready)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "setup", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "question", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 330
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "permission", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 330
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "notification", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "stop", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/notify.ps1", "-Event", "prompt", "-DataDir", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

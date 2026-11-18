@@ -1,0 +1,14 @@
+{
+  "name": "claudecode-notification-toast",
+  "displayName": "claude-toast",
+  "version": "1.0.0",
+  "description": "Windows toast notifications for Claude Code that you can answer: pick an answer to Claude's questions, Allow/Deny permissions, and get a 'Response ready' toast, without switching to the terminal.",
+  "author": {
+    "name": "Jayanth Kalwa",
+    "url": "https://github.com/kalwajayanth"
+  },
+  "homepage": "https://github.com/kalwajayanth/claude-toast",
+  "repository": "https://github.com/kalwajayanth/claude-toast",
+  "license": "MIT",
+  "keywords": ["windows", "toast", "notifications", "hooks", "askuserquestion", "permissions", "powershell"]
+}
