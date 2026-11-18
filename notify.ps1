@@ -10,6 +10,8 @@
     -Event stop           Stop                                   one "Response ready" toast per reply
     -Event prompt         UserPromptSubmit                       you replied: clear that chat's toasts
     -Event setup          SessionStart (plugin only)             registers the button link handler
+    -Event unlock         (started by notify.ps1 itself)         a prompt gave up while the screen was
+                          -Session <id>                          locked: pop it up again once you unlock
 
   -DataDir: where config.json, logs\ and state\ live. The plugin passes ${CLAUDE_PLUGIN_DATA}
   (kept across plugin updates); a manual install (install.ps1) leaves it empty = this folder.
@@ -17,11 +19,12 @@
   Contract with Claude Code: never break it.
     * always exits 0; every error is caught and logged to logs\error.log
     * stdout stays empty, except one JSON decision when you answered from a toast
-    * only question/permission wait for a click (up to interactive.timeoutSeconds), and only
-      when you are NOT looking at that chat's terminal tab; on timeout, "Terminal" or any error
-      they return nothing and Claude Code shows its normal terminal prompt.
+    * only question/permission wait for a click (up to interactive.timeoutSeconds, or
+      interactive.lockedTimeoutSeconds while the screen is locked), and only when you are NOT
+      looking at that chat's terminal tab; on timeout, "Terminal" or any error they return
+      nothing and Claude Code shows its normal terminal prompt.
 #>
-param([string]$Event = 'notification', [string]$DataDir)
+param([string]$Event = 'notification', [string]$DataDir, [string]$Session)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
@@ -429,6 +432,8 @@ function New-ToastContext($payload, [string]$chatName) {
         SessionFile = ''; EventsDir = ''; Deadline = [DateTime]::MaxValue; LastMark = [DateTime]::UtcNow
         Shown = (New-Object System.Collections.Generic.List[string])
         Reshow = $null; WasLocked = $false      # scriptblock to pop the current toast up again after unlock
+        LockedSince = $null; LockedLimit = 0    # give up after this many seconds of locked screen (0 = never)
+        AwayToast = $null                       # what to pop up after unlock if it gave up while locked
     }
 }
 
@@ -568,7 +573,10 @@ function Start-ToastWait($payload, [string]$chatName) {
     $ctx.EventsDir   = Join-Path $script:StateDir ($ctx.SafeId + '.events')
     if (Test-Path -LiteralPath $ctx.EventsDir) { Remove-Item -LiteralPath $ctx.EventsDir -Recurse -Force }
     $null = New-Item -ItemType Directory -Path $ctx.EventsDir -Force
-    $ctx.Deadline = [DateTime]::UtcNow.AddSeconds([double](Get-ConfigValue 'interactive.timeoutSeconds' 300))
+    $ctx.Deadline = [DateTime]::UtcNow.AddSeconds([double](Get-ConfigValue 'interactive.timeoutSeconds' 60))
+    $ctx.LockedLimit = [double](Get-ConfigValue 'interactive.lockedTimeoutSeconds' 30)
+    # A new prompt replaces an older one that is still waiting for you to unlock.
+    Remove-Item -LiteralPath (Get-AwayPath $ctx.SafeId) -Force -ErrorAction SilentlyContinue
     Write-JsonFile $ctx.SessionFile ([ordered]@{ token = $ctx.Token; chatName = $chatName; terminalPid = 0 })
     return $ctx
 }
@@ -597,26 +605,46 @@ function Read-NextClick([string]$eventsDir) {
 # Next valid click on toast number $qi, or $null when the wait times out.
 function Wait-NextClick($ctx, [int]$qi) {
     $lastLook = [DateTime]::UtcNow
+    $lastLockCheck = [DateTime]::MinValue
+    $gaveUpLocked = [pscustomobject]@{ Action = 'locked'; Token = $ctx.Token; Q = $qi; O = -1 }
     while ($true) {
-        if ([DateTime]::UtcNow -gt $ctx.Deadline) { return $null }
+        if ([DateTime]::UtcNow -gt $ctx.Deadline) {
+            # Timed out while you are away: still pop it up again when you unlock.
+            if ($ctx.WasLocked) { return $gaveUpLocked }
+            return $null
+        }
         $click = Read-NextClick $ctx.EventsDir
         if ($null -eq $click) {
             Start-Sleep -Milliseconds 150
-            if (([DateTime]::UtcNow - $ctx.LastMark).TotalSeconds -ge 5) {
+            $now = [DateTime]::UtcNow
+            if (($now - $ctx.LastMark).TotalSeconds -ge 5) {
                 Set-QuestionMarker $ctx.SafeId      # keep Claude Code's generic notification quiet while we wait
-                $ctx.LastMark = [DateTime]::UtcNow
+                $ctx.LastMark = $now
             }
-            if (([DateTime]::UtcNow - $lastLook).TotalSeconds -ge 1.5) {
-                $lastLook = [DateTime]::UtcNow
-                # Toasts never pop up on the lock screen: show it again once you unlock.
+            # Toasts never pop up on the lock screen: show it again the moment you unlock.
+            # Cheap check (which app has the focus), so it runs ~4x a second.
+            if (($now - $lastLockCheck).TotalMilliseconds -ge 250) {
+                $lastLockCheck = $now
                 $locked = Test-ScreenLocked
                 if ($ctx.WasLocked -and -not $locked -and $ctx.Reshow) {
                     Write-ActivityLog 'RESHOWN | screen unlocked - showing the waiting toast again'
                     & $ctx.Reshow
                 }
                 $ctx.WasLocked = $locked
+                if (-not $locked) { $ctx.LockedSince = $null }
+                elseif ($null -eq $ctx.LockedSince) { $ctx.LockedSince = $now }
+                elseif ($ctx.LockedLimit -gt 0 -and ($now - $ctx.LockedSince).TotalSeconds -ge $ctx.LockedLimit) {
+                    # Don't keep Claude waiting on a toast you can't see: hand it to the terminal now,
+                    # and pop it up again the moment you unlock (Start-UnlockWatch).
+                    Write-ActivityLog ('AWAY | screen locked for {0} s - prompt goes to the terminal, pops up again when you unlock' -f [int]$ctx.LockedLimit)
+                    return $gaveUpLocked
+                }
+            }
+            # Slower check (walks the terminal's tabs), every 1.5 s.
+            if (($now - $lastLook).TotalSeconds -ge 1.5) {
+                $lastLook = $now
                 # You came back to this chat's terminal tab (e.g. the toast was hidden): answer there instead.
-                if (-not $locked -and (Test-WatchingChat $ctx.ChatName)) {
+                if (-not $ctx.WasLocked -and (Test-WatchingChat $ctx.ChatName)) {
                     Write-ActivityLog 'MOVED | you switched to this chat - handing the prompt to the terminal'
                     return [pscustomobject]@{ Action = 'terminal'; Token = $ctx.Token; Q = $qi; O = -1 }
                 }
@@ -634,10 +662,68 @@ function Stop-ToastWait($ctx, [string]$outcome, [string]$detail) {
     Remove-Item -LiteralPath $ctx.EventsDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $ctx.SessionFile -Force -ErrorAction SilentlyContinue
     # Answered / sent to terminal: the terminal shows it now, no extra notification needed.
+    # Gave up while locked: our unlock watcher pops it up again, so no extra notification either.
     # Timed out: you're away, so let Claude Code's own notification raise a (persistent) toast.
     if ($outcome -ne 'timeout') { Set-QuestionMarker $ctx.SafeId }
     else { Remove-Item -LiteralPath (Get-MarkerPath $ctx.SafeId) -Force -ErrorAction SilentlyContinue }
     Write-ActivityLog ('RESULT | {0} | {1}' -f $outcome, $detail)
+    if ($outcome -eq 'locked' -and $ctx.AwayToast) {
+        try { Start-UnlockWatch $ctx } catch { Write-ErrorLog ('unlock watcher failed: ' + (Format-ErrorRecord $_)) }
+    }
+}
+
+# ------------------------------------------------------------------ gave up while locked: pop up again on unlock
+# state\<session>.away.json holds the toast to show; a hidden "notify.ps1 -Event unlock" waits for
+# you to unlock and shows it. Deleting the file (you replied, or a new prompt came) cancels it.
+
+function Get-AwayPath([string]$safeId) { return (Join-Path $script:StateDir ($safeId + '.away.json')) }
+
+function Start-UnlockWatch($ctx) {
+    $away = $ctx.AwayToast
+    $blocks = foreach ($block in @($away.Blocks)) {
+        if ($null -eq $block) { continue }
+        [ordered]@{ Heading = [string]$block.Heading; Lines = @($block.Lines); Caption = [string]$block.Caption }
+    }
+    Write-JsonFile (Get-AwayPath $ctx.SafeId) ([ordered]@{
+        id = [guid]::NewGuid().ToString('N'); sessionId = $ctx.SafeId; chatName = $ctx.ChatName
+        terminalPid = $ctx.TerminalPid; body = $away.Body; blocks = @($blocks)
+        attribution = $away.Attribution; kind = $away.Kind
+        until = [DateTime]::UtcNow.AddMinutes(60).ToString('o')
+    })
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                   '-File', ('"{0}"' -f (Join-Path $script:Root 'notify.ps1')), '-Event', 'unlock', '-Session', $ctx.SafeId)
+    if ($script:PluginMode) { $arguments += @('-DataDir', ('"{0}"' -f $script:DataDir)) }
+    # Start-Process (ShellExecute): own process, inherits no handles, so this hook still ends right away.
+    Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+        -ArgumentList $arguments -WindowStyle Hidden
+}
+
+function Read-AwayFile([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { return ([System.IO.File]::ReadAllText($path, $script:Utf8) | ConvertFrom-Json) } catch { return 'busy' }
+}
+
+function Invoke-UnlockWatch([string]$safeId) {
+    $safeId = Get-SafeId $safeId
+    $path = Get-AwayPath $safeId
+    $away = Read-AwayFile $path
+    if ($null -eq $away -or $away -eq 'busy') { return }
+    $until = [DateTime]::Parse([string]$away.until, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+    while ($true) {
+        Start-Sleep -Milliseconds 250
+        $now = Read-AwayFile $path
+        if ($now -eq 'busy') { continue }
+        if ($null -eq $now -or $now.id -ne $away.id) { Write-ActivityLog 'AWAY | cancelled (you replied, or a newer prompt came)'; return }
+        if (-not (Test-ScreenLocked)) { break }
+        if ([DateTime]::UtcNow -gt $until) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue; Write-ActivityLog 'AWAY | still locked after 60 min - gave up'; return }
+    }
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if (Test-WatchingChat ([string]$away.chatName)) { Write-ActivityLog 'AWAY | unlocked onto this chat - the terminal shows the prompt'; return }
+    $ctx = New-ToastContext ([pscustomobject]@{ session_id = $safeId }) ([string]$away.chatName)
+    $ctx.TerminalPid = [int]$away.terminalPid
+    $blocks = foreach ($block in @($away.blocks)) { if ($block) { New-Block ([string]$block.Heading) @($block.Lines) ([string]$block.Caption) } }
+    Write-ActivityLog 'RESHOWN | screen unlocked - the prompt is waiting in the terminal'
+    Show-InfoToast $ctx ([string]$away.body) @($blocks) ([string]$away.attribution) ([string]$away.kind) 'away'
 }
 
 # ------------------------------------------------------------------ questions (PreToolUse: AskUserQuestion)
@@ -743,6 +829,7 @@ function Show-QuestionToast($ctx, $questions, [int]$qi, $selected, [bool]$quiet,
 # Returns an ordered map {question text -> answer}, or $null to fall back to the terminal.
 function Wait-ForToastAnswers($payload, $questions, [string]$chatName, $summary) {
     $ctx = Start-ToastWait $payload $chatName
+    $ctx.AwayToast = @{ Body = $summary.Body; Blocks = $summary.Blocks; Attribution = 'Claude asked while you were away - answer in the terminal'; Kind = 'question' }
     $answers = [ordered]@{}
     $outcome = 'timeout'
     try {
@@ -763,6 +850,7 @@ function Wait-ForToastAnswers($payload, $questions, [string]$chatName, $summary)
                 $click = Wait-NextClick $ctx $qi
                 if ($null -eq $click) { $outcome = 'timeout'; return $null }
                 if ($click.Action -eq 'terminal') { $outcome = 'terminal'; return $null }
+                if ($click.Action -eq 'locked')   { $outcome = 'locked';   return $null }
                 $validOption = ($click.O -ge 0 -and $click.O -lt $labels.Count)
                 switch ($click.Action) {
                     'pick' {
@@ -876,6 +964,7 @@ function Invoke-PermissionEvent($payload) {
         Show-ActionToast $ctx $what.Verb $blocks "Permission needed - $tool" $buttons 'permission' $tag $false $null '' (Get-ActionUri 'terminal' $ctx 0 -1)
         $ctx.Shown.Add($tag)
         $ctx.Reshow = { Show-ActionToast $ctx $what.Verb $blocks "Permission needed - $tool" $buttons 'permission' $tag $false $null '' (Get-ActionUri 'terminal' $ctx 0 -1) }
+        $ctx.AwayToast = @{ Body = $what.Verb; Blocks = $blocks; Attribution = "Permission needed while you were away - answer in the terminal"; Kind = 'permission' }
         Send-NtfySafe $chatName $what.Verb $blocks 'permission'
         Update-WaitTerminal $ctx
 
@@ -897,6 +986,7 @@ function Invoke-PermissionEvent($payload) {
                     return
                 }
                 'terminal' { $outcome = 'terminal'; return }
+                'locked'   { $outcome = 'locked'; return }
             }
         }
     } finally {
@@ -942,6 +1032,7 @@ function Invoke-StopEvent($payload) {
     $snippet = Get-LastAssistantText $payload
     $blocks  = if ($snippet) { @(New-Block '' @($snippet) '') } else { @() }
     $ctx = New-ToastContext $payload $chatName
+    Remove-Toast 'away' $ctx.Group      # the prompt from while you were away has been answered by now
     Show-InfoToast $ctx 'Claude finished - response ready' $blocks 'Response ready' 'ready' 'ready'
     Send-NtfySafe $chatName 'Claude finished - response ready' $blocks 'ready'
 }
@@ -949,6 +1040,7 @@ function Invoke-StopEvent($payload) {
 # UserPromptSubmit: you replied in this chat, so its toasts are out of date.
 function Invoke-PromptEvent($payload) {
     $safe = Get-SafeId ([string]$payload.session_id)
+    Remove-Item -LiteralPath (Get-AwayPath $safe) -Force -ErrorAction SilentlyContinue   # stops a waiting unlock watcher
     $removed = Remove-SessionToasts (Get-SessionGroup $safe)
     Write-ActivityLog ('CLEARED | {0} toast(s) of this chat removed (you replied)' -f $removed)
 }
@@ -992,6 +1084,7 @@ function Invoke-Main {
 
     if ($Event -eq 'setup') { Invoke-SetupEvent; return }
     if ($script:PluginMode -and (Test-Path -LiteralPath (Get-ManualInstallMarker))) { return }
+    if ($Event -eq 'unlock') { Invoke-UnlockWatch $Session; return }
 
     $payload = Read-Payload
     if ($null -eq $payload) { Write-ErrorLog 'no JSON payload on stdin'; return }

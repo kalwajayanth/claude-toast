@@ -67,8 +67,11 @@ old (`dedupeSeconds`).
     button becomes **Done**. Clicking the toast text still takes you to the terminal.
 * **Click the toast itself** (not a button) — same as **Terminal**: takes you to the chat.
 * **Toast hidden?** Windows never pops up toasts on the lock screen (or with Do Not Disturb).
-  If the PC was locked while a prompt waited, the toast pops up again when you unlock; and as
-  soon as you switch to that chat's terminal tab, the prompt moves to the terminal by itself.
+  If you unlock within 30 s (`interactive.lockedTimeoutSeconds`), the clickable toast pops up
+  again right away (~0.1–0.4 s). If the screen stays locked longer, the prompt goes to the
+  terminal so Claude isn't held up by a toast you can't see — and the moment you unlock, it pops
+  up again as a "while you were away" toast with **Show terminal** (answer it there). As soon as
+  you switch to that chat's terminal tab, the prompt moves to the terminal by itself.
 * **Several questions** — one toast per question; the next slides in after you answer. When all
   are answered, Claude Code gets the answers and the terminal question never appears.
   **Terminal** on any of them sends the whole set to the terminal (Claude Code takes the answers
@@ -81,7 +84,7 @@ old (`dedupeSeconds`).
 * **Free-text answers ("Other")** can't be typed into a toast — use Terminal.
 
 How it works: the hook shows the toast and **waits** (up to `interactive.timeoutSeconds`, default
-5 minutes) for your click. Buttons open a `claude-toast:` link, which Windows hands to
+1 minute; 30 s of locked screen with `interactive.lockedTimeoutSeconds`) for your click. Buttons open a `claude-toast:` link, which Windows hands to
 `answer.ps1` (registered per user by `install.ps1`, started through `conhost.exe --headless` so no
 window appears). `answer.ps1` records the click, and the waiting hook returns Claude Code's
 documented decision:
@@ -183,8 +186,9 @@ config (with `skipWhenWatching` off); your `config.json` is not used.
 | `14` you replied | that chat's toasts are removed |
 | `15` / `16` permission | Bash command → **Allow** / **Deny** decision |
 | `17` AskUserQuestion permission | left alone (the question hook handles it) |
-| `18` screen locked while waiting | toast shown again after unlock, then answered |
+| `18` screen locked while waiting | toast shown again within 0.6 s of unlocking, then answered |
 | `19` you switch to the chat | question handed to the terminal at once |
+| `20` locked too long | after `lockedTimeoutSeconds` (1 s here) the question goes to the terminal, the hook ends at once, and a "while you were away" toast pops up on unlock |
 
 Options: `-Only 09` runs one case, `-DelaySeconds 0` skips the pauses between cases.
 
@@ -222,7 +226,7 @@ scripts.
 ```json
 {
   "dedupeSeconds": 60,
-  "interactive": { "enabled": true, "timeoutSeconds": 300, "skipWhenWatching": true },
+  "interactive": { "enabled": true, "timeoutSeconds": 60, "lockedTimeoutSeconds": 30, "skipWhenWatching": true },
   "debug": false,
   "sounds": {
     "question":   "ms-winsoundevent:Notification.Reminder",
@@ -234,8 +238,10 @@ scripts.
 ```
 
 * **interactive** — answer questions and permissions from the toast; how long to wait for a
-  click; skip toasts for the chat you're looking at. Re-run `install.ps1` after changing
-  `timeoutSeconds`.
+  click (`timeoutSeconds`, default 60); how long to keep waiting while the screen is locked
+  before handing the prompt to the terminal (`lockedTimeoutSeconds`, default 30, `0` = no
+  separate limit) — it pops up again when you unlock; skip toasts for the chat you're looking
+  at. Re-run `install.ps1` after changing `timeoutSeconds`.
 * **sounds** — any `ms-winsoundevent:` value (`Notification.Default`, `.IM`, `.Mail`, `.Reminder`,
   `.SMS`), or `"silent"`. Questions, permissions and "Response ready" each sound different.
 * **debug** — `true` logs every toast, click and result to `logs\activity.log`

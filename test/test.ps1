@@ -39,6 +39,7 @@ $configs = @{
     interactive = '{ "interactive": { "enabled": true, "timeoutSeconds": 30, "skipWhenWatching": false } }'
     timeout     = '{ "interactive": { "enabled": true, "timeoutSeconds": 3, "skipWhenWatching": false } }'
     watching    = '{ "interactive": { "enabled": true, "timeoutSeconds": 30, "skipWhenWatching": true } }'
+    locked      = '{ "interactive": { "enabled": true, "timeoutSeconds": 30, "lockedTimeoutSeconds": 1, "skipWhenWatching": false } }'
 }
 foreach ($k in $configs.Keys) { [System.IO.File]::WriteAllText((Join-Path $cfgDir "$k.json"), $configs[$k], $utf8) }
 # Files that make notify.ps1 believe the screen is locked / you are looking at the chat (tests only).
@@ -92,11 +93,15 @@ $cases = @(
     @{ Id = '17'; File = '11-permission-askuserquestion.json'; Event = 'permission'; Config = 'interactive'; Expect = 'NOOP'
        What = 'permission request for AskUserQuestion -> left to the question hook, returns at once' }
     @{ Id = '18'; File = '01-question-single.json';      Event = 'question';     Config = 'interactive'; Expect = 'ANSWERED'
-       What = 'screen locked while waiting (toast hidden) -> unlocked -> toast shown again -> click 3'
-       Clicks = @('lock', 'unlock', 'pick 0 2'); Answers = @{ $Q1 = 'Skip' }; ExpectLog = 'RESHOWN' }
+       What = 'screen locked while waiting (toast hidden) -> unlocked -> toast shown again within 0.6 s -> click 3'
+       Clicks = @('lock', 'unlock', 'pick 0 2'); Answers = @{ $Q1 = 'Skip' }; ExpectLog = 'RESHOWN'; MaxReshowMs = 600 }
     @{ Id = '19'; File = '01-question-single.json';      Event = 'question';     Config = 'watching';    Expect = 'FALLBACK'
        What = 'you switch to the chat''s terminal tab while it waits -> question moves to the terminal'
        Clicks = @('watch'); ExpectLog = 'MOVED' }
+    @{ Id = '20'; File = '01-question-single.json';      Event = 'question';     Config = 'locked';      Expect = 'FALLBACK'
+       What = 'screen stays locked past lockedTimeoutSeconds (1 s here) -> question goes to the terminal; pops up again on unlock'
+       Clicks = @('lock', 'awayunlock'); MaxReshowMs = 600
+       ExpectLog = '(?s)AWAY \| screen locked.*RESULT \| locked.*RESHOWN \| screen unlocked - the prompt is waiting in the terminal.*SHOWN \| [^|]*\| Which database' }
 )
 if ($Only) { $cases = @($cases | Where-Object { $_.Id -like "$Only*" }) }
 
@@ -134,11 +139,31 @@ function Send-Click([string]$sessionId, [string]$spec) {
     $action = $parts[0]; $q = $parts[1]; $o = if ($parts.Count -gt 2) { $parts[2] } else { '' }
     $sessionFile = Join-Path $stateDir "$sessionId.session.json"
     $eventsDir   = Join-Path $stateDir "$sessionId.events"
-    for ($i = 0; $i -lt 60 -and -not (Test-Path -LiteralPath $sessionFile); $i++) { Start-Sleep -Milliseconds 100 }
-    if (-not (Test-Path -LiteralPath $sessionFile)) { throw "hook never started waiting (no $sessionFile)" }
+    if ($action -eq 'awayunlock') {
+        # The hook gave up while "locked": it must have ended (Claude Code waits for its output to
+        # close) and left the prompt to the hidden unlock watcher.
+        $awayFile = Join-Path $stateDir "$sessionId.away.json"
+        for ($i = 0; $i -lt 50 -and -not (Test-Path -LiteralPath $awayFile); $i++) { Start-Sleep -Milliseconds 100 }
+        if (-not (Test-Path -LiteralPath $awayFile)) { throw 'no hand-over to the unlock watcher (no away.json)' }
+        if (-not $script:CurrentRun.Out.Wait(5000)) { throw 'hook output still open after giving up - Claude Code would keep waiting' }
+        Start-Sleep -Milliseconds 1500          # let the hidden watcher start up
+        $action = 'unlock'
+    }
+    for ($i = 0; $action -ne 'unlock' -and $i -lt 60 -and -not (Test-Path -LiteralPath $sessionFile); $i++) { Start-Sleep -Milliseconds 100 }
+    if ($action -ne 'unlock' -and -not (Test-Path -LiteralPath $sessionFile)) { throw "hook never started waiting (no $sessionFile)" }
     switch ($action) {
         'lock'   { [System.IO.File]::WriteAllText($fakeLock, 'x'); Start-Sleep -Milliseconds 2500; return }
-        'unlock' { Remove-Item $fakeLock -Force; Start-Sleep -Milliseconds 2500; return }
+        'unlock' {
+            # Measure how fast the toast comes back after unlocking.
+            $logFrom = Get-FileLength $activity
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            Remove-Item $fakeLock -Force
+            while ($sw.ElapsedMilliseconds -lt 5000 -and (Get-NewText $activity $logFrom) -notmatch 'RESHOWN') { Start-Sleep -Milliseconds 25 }
+            $script:ReshowMs = $sw.ElapsedMilliseconds
+            # ...and for the toast itself to be logged (the unlock watcher runs on its own).
+            while ($sw.ElapsedMilliseconds -lt 8000 -and (Get-NewText $activity $logFrom) -notmatch '(?s)RESHOWN.*\] SHOWN') { Start-Sleep -Milliseconds 25 }
+            return
+        }
         'watch'  { [System.IO.File]::WriteAllText($fakeWatch, 'x'); Start-Sleep -Milliseconds 2500; return }
     }
     $token = ([System.IO.File]::ReadAllText($sessionFile, $utf8) | ConvertFrom-Json).token
@@ -174,8 +199,10 @@ foreach ($case in $cases) {
 
     $activityStart = Get-FileLength $activity
     $errorStart    = Get-FileLength $errorLog
+    $script:ReshowMs = -1
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $run   = Start-Notify $case.Event $bytes $case.Config
+    $script:CurrentRun = $run
     $clickError = $null
     try { foreach ($click in @($case.Clicks)) { if ($click) { Send-Click $session $click } } }
     catch { $clickError = $_.Exception.Message }
@@ -219,7 +246,7 @@ foreach ($case in $cases) {
                 }
             } catch { $problems += "stdout is not the expected JSON: '$stdout'" }
         } elseif ($stdout) { $problems += "expected no stdout (fall back to terminal), got: $stdout" }
-        if ($case.Expect -eq 'FALLBACK' -and $did -notmatch 'RESULT \| (terminal|timeout)') { $problems += 'no terminal/timeout result logged' }
+        if ($case.Expect -eq 'FALLBACK' -and $did -notmatch 'RESULT \| (terminal|timeout|locked)') { $problems += 'no terminal/timeout result logged' }
     } else {
         $outcome = if ($did -cmatch '\] SHOWN \|') { 'SHOWN' } elseif ($did -cmatch '\] SKIPPED \|') { 'SKIPPED' } elseif ($errors) { 'ERROR' } else { 'NOTHING' }
         if ($stdout) { $problems += "wrote to stdout: $($stdout.Trim())" }
@@ -228,14 +255,18 @@ foreach ($case in $cases) {
     }
     if ($case.Expect -ne 'ERROR' -and $errors) { $problems += "error.log: $errors" }
     if ($case.ExpectLog -and $did -notmatch $case.ExpectLog) { $problems += "expected a $($case.ExpectLog) entry in the activity log" }
+    if ($case.MaxReshowMs) {
+        if ($script:ReshowMs -lt 0 -or $script:ReshowMs -gt $case.MaxReshowMs) { $problems += "toast came back $($script:ReshowMs) ms after unlocking (limit $($case.MaxReshowMs) ms)" }
+    }
     Remove-Item $fakeLock, $fakeWatch -Force -ErrorAction SilentlyContinue
 
     $color = if ($problems.Count) { 'Red' } else { 'Green' }
     $mark  = if ($problems.Count) { 'FAIL' } else { 'ok  ' }
     Write-Host ('[{0}] {1} {2}  ({3} ms, exit {4})' -f $mark, $case.Id, $case.File, $watch.ElapsedMilliseconds, $run.Proc.ExitCode) -ForegroundColor $color
     Write-Host ('       {0}' -f $case.What)
+    if ($case.MaxReshowMs -and $script:ReshowMs -ge 0) { Write-Host "       re-pop after unlock: $($script:ReshowMs) ms" }
     foreach ($line in ($did -split "`r?`n")) {
-        if ($line -match '\] (SHOWN|SKIPPED|RESULT|CLICK|STALE|TERMINAL|CLEARED|RESHOWN|MOVED) \| (.*)$') {
+        if ($line -match '\] (SHOWN|SKIPPED|RESULT|CLICK|STALE|TERMINAL|CLEARED|RESHOWN|MOVED|AWAY) \| (.*)$') {
             $kind = $Matches[1]; $rest = $Matches[2]
             if ($kind -eq 'SHOWN') {
                 $f = $rest -split ' \| '

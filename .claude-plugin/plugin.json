@@ -1,7 +1,7 @@
 {
   "name": "claudecode-notification-toast",
   "displayName": "claude-toast",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Windows toast notifications for Claude Code that you can answer: pick an answer to Claude's questions, Allow/Deny permissions, and get a 'Response ready' toast, without switching to the terminal.",
   "author": {
     "name": "Jayanth Kalwa",

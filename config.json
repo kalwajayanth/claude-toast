@@ -2,7 +2,8 @@
   "dedupeSeconds": 60,
   "interactive": {
     "enabled": true,
-    "timeoutSeconds": 300,
+    "timeoutSeconds": 60,
+    "lockedTimeoutSeconds": 30,
     "skipWhenWatching": true
   },
   "debug": false,
